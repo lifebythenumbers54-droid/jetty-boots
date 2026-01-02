@@ -1,5 +1,6 @@
 using JettyBoots.Decision;
 using JettyBoots.GameState;
+using JettyBoots.Input;
 using JettyBoots.ScreenCapture;
 using OpenCvSharp;
 using Point = OpenCvSharp.Point;
@@ -55,6 +56,13 @@ class Program
             return;
         }
 
+        if (args.Contains("--play"))
+        {
+            bool dryRun = args.Contains("--dry-run");
+            RunAutoPlayer(dryRun);
+            return;
+        }
+
         ShowHelp();
     }
 
@@ -62,6 +70,8 @@ class Program
     {
         Console.WriteLine("Usage: JettyBoots [options]\n");
         Console.WriteLine("Options:");
+        Console.WriteLine("  --play            Run the auto-player (sends inputs to game)");
+        Console.WriteLine("  --play --dry-run  Run auto-player without sending inputs");
         Console.WriteLine("  --test-capture    Test screen capture functionality");
         Console.WriteLine("  --test-detection  Test detection on a single frame");
         Console.WriteLine("  --test-decision   Test decision engine with trajectory simulation");
@@ -591,5 +601,81 @@ class Program
                 Cv2.Circle(frame, new Point(x, y), 3, new Scalar(alpha, alpha, 0), -1);
             }
         }
+    }
+
+    static void RunAutoPlayer(bool dryRun)
+    {
+        Console.WriteLine("=== Jetty Boots Auto-Player ===\n");
+
+        if (dryRun)
+        {
+            Console.WriteLine("*** DRY RUN MODE - No inputs will be sent ***\n");
+        }
+        else
+        {
+            Console.WriteLine("*** LIVE MODE - Inputs WILL be sent to game ***");
+            Console.WriteLine("Make sure Deep Rock Galactic is focused!\n");
+            Console.WriteLine("Press Enter to start, or Ctrl+C to cancel...");
+            Console.ReadLine();
+        }
+
+        var region = GetCaptureRegion();
+
+        if (region.Width == 800 && region.Height == 600 && region.X == 0 && region.Y == 0)
+        {
+            Console.WriteLine("\nWARNING: Game window not found. Using test region.");
+            Console.WriteLine("The auto-player may not work correctly.\n");
+        }
+
+        using var capture = new GdiScreenCapture(region);
+        using var gameLoop = new GameLoop(capture);
+
+        // Configure the game loop
+        gameLoop.DryRun = dryRun;
+        gameLoop.TargetFps = 30;
+        gameLoop.ShowDebugWindow = true;
+
+        // Subscribe to events
+        gameLoop.OnLog += message => Console.WriteLine(message);
+
+        gameLoop.OnStatusUpdate += status =>
+        {
+            // Print status every 30 frames (once per second at 30 FPS)
+            if (status.FrameNumber % 30 == 0)
+            {
+                var stats = status.Statistics;
+                Console.WriteLine($"[Stats] Frame: {stats.FrameCount}, Jumps: {stats.JumpsSent}, " +
+                    $"Games: {stats.GamesPlayed}, FPS: {stats.AverageFps:F1}");
+            }
+        };
+
+        // Setup cancellation
+        using var cts = new CancellationTokenSource();
+        Console.CancelKeyPress += (s, e) =>
+        {
+            e.Cancel = true;
+            Console.WriteLine("\nStopping...");
+            cts.Cancel();
+        };
+
+        Console.WriteLine("Starting game loop...");
+        Console.WriteLine("Press 'Q' in debug window or Ctrl+C to stop.\n");
+
+        try
+        {
+            gameLoop.Run(cts.Token);
+        }
+        catch (OperationCanceledException)
+        {
+            // Normal cancellation
+        }
+
+        var finalStats = gameLoop.Statistics;
+        Console.WriteLine("\n=== Final Statistics ===");
+        Console.WriteLine($"Total frames: {finalStats.FrameCount}");
+        Console.WriteLine($"Total jumps: {finalStats.JumpsSent}");
+        Console.WriteLine($"Games played: {finalStats.GamesPlayed}");
+        Console.WriteLine($"Run time: {finalStats.RunTime:mm\\:ss}");
+        Console.WriteLine($"Average FPS: {finalStats.AverageFps:F1}");
     }
 }
