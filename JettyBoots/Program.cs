@@ -1,5 +1,7 @@
+using JettyBoots.GameState;
 using JettyBoots.ScreenCapture;
 using OpenCvSharp;
+using Point = OpenCvSharp.Point;
 
 namespace JettyBoots;
 
@@ -13,6 +15,18 @@ class Program
         if (args.Contains("--test-capture"))
         {
             RunCaptureTest();
+            return;
+        }
+
+        if (args.Contains("--test-detection"))
+        {
+            RunDetectionTest();
+            return;
+        }
+
+        if (args.Contains("--live-detection"))
+        {
+            RunLiveDetection();
             return;
         }
 
@@ -36,6 +50,8 @@ class Program
         Console.WriteLine("Usage: JettyBoots [options]\n");
         Console.WriteLine("Options:");
         Console.WriteLine("  --test-capture    Test screen capture functionality");
+        Console.WriteLine("  --test-detection  Test detection on a single frame");
+        Console.WriteLine("  --live-detection  Run live detection with visual overlay");
         Console.WriteLine("  --list-windows    List all visible windows");
         Console.WriteLine("  --find-game       Find Deep Rock Galactic window");
         Console.WriteLine("  --help            Show this help message\n");
@@ -88,35 +104,29 @@ class Program
         }
     }
 
-    static void RunCaptureTest()
+    static CaptureRegion GetCaptureRegion()
     {
-        Console.WriteLine("Running screen capture test...\n");
-
-        // Try to find game window first
         var gameHwnd = WindowHelper.FindDeepRockGalacticWindow();
-        CaptureRegion region;
 
         if (gameHwnd != IntPtr.Zero)
         {
             var clientRegion = WindowHelper.GetClientRegion(gameHwnd);
             if (clientRegion != null)
             {
-                region = clientRegion;
-                Console.WriteLine($"Capturing Deep Rock Galactic window: {region.Width}x{region.Height}");
+                Console.WriteLine($"Capturing Deep Rock Galactic window: {clientRegion.Width}x{clientRegion.Height}");
+                return clientRegion;
             }
-            else
-            {
-                region = new CaptureRegion(0, 0, 800, 600);
-                Console.WriteLine("Using default capture region (800x600)");
-            }
-        }
-        else
-        {
-            // Capture a portion of the screen for testing
-            region = new CaptureRegion(0, 0, 800, 600);
-            Console.WriteLine("Game not found. Capturing screen region (800x600) for testing...");
         }
 
+        Console.WriteLine("Game not found. Capturing screen region (800x600) for testing...");
+        return new CaptureRegion(0, 0, 800, 600);
+    }
+
+    static void RunCaptureTest()
+    {
+        Console.WriteLine("Running screen capture test...\n");
+
+        var region = GetCaptureRegion();
         using var capture = new GdiScreenCapture(region);
 
         // Warm up
@@ -152,7 +162,6 @@ class Program
                 Console.WriteLine($"\nSaved first frame to: {filename}\n");
             }
 
-            // Small delay to simulate game loop
             Thread.Sleep(16); // ~60 FPS target
         }
 
@@ -162,5 +171,143 @@ class Program
         Console.WriteLine($"Average capture time: {finalMetrics.CaptureTimeMs:F2}ms");
         Console.WriteLine($"Estimated max FPS: {1000.0 / finalMetrics.CaptureTimeMs:F1}");
         Console.WriteLine($"Achieved FPS: {finalMetrics.FramesPerSecond:F1}");
+    }
+
+    static void RunDetectionTest()
+    {
+        Console.WriteLine("Running detection test...\n");
+
+        var region = GetCaptureRegion();
+        using var capture = new GdiScreenCapture(region);
+        using var analyzer = new GameAnalyzer();
+
+        // Capture a single frame
+        using var frame = capture.CaptureFrame();
+
+        if (frame == null)
+        {
+            Console.WriteLine("Failed to capture frame!");
+            return;
+        }
+
+        Console.WriteLine($"Captured frame: {frame.Width}x{frame.Height}\n");
+
+        // Analyze the frame
+        var analysis = analyzer.Analyze(frame);
+
+        // Print results
+        Console.WriteLine("=== Detection Results ===\n");
+
+        Console.WriteLine($"Analysis time: {analysis.AnalysisTimeMs:F2}ms");
+        Console.WriteLine();
+
+        Console.WriteLine("Player Detection:");
+        if (analysis.Player.Detected)
+        {
+            Console.WriteLine($"  Position: ({analysis.Player.X}, {analysis.Player.Y})");
+            Console.WriteLine($"  Size: {analysis.Player.Width}x{analysis.Player.Height}");
+            Console.WriteLine($"  Center: ({analysis.Player.CenterX}, {analysis.Player.CenterY})");
+            Console.WriteLine($"  Confidence: {analysis.Player.Confidence:P1}");
+        }
+        else
+        {
+            Console.WriteLine("  Not detected");
+        }
+        Console.WriteLine();
+
+        Console.WriteLine("Obstacle Detection:");
+        if (analysis.Obstacles.Detected)
+        {
+            Console.WriteLine($"  Found {analysis.Obstacles.Obstacles.Count} obstacle(s)");
+            foreach (var obs in analysis.Obstacles.Obstacles)
+            {
+                Console.WriteLine($"  - X: {obs.X}, Width: {obs.Width}");
+                Console.WriteLine($"    Gap: Y={obs.GapTop} to Y={obs.GapBottom} (height: {obs.GapHeight})");
+                Console.WriteLine($"    Gap center: Y={obs.GapCenterY}");
+            }
+            Console.WriteLine($"  Confidence: {analysis.Obstacles.Confidence:P1}");
+        }
+        else
+        {
+            Console.WriteLine("  No obstacles detected");
+        }
+        Console.WriteLine();
+
+        Console.WriteLine("Game State:");
+        Console.WriteLine($"  State: {analysis.GameState.State}");
+        Console.WriteLine($"  Confidence: {analysis.GameState.Confidence:P1}");
+        Console.WriteLine();
+
+        // Save annotated frame
+        using var overlay = analyzer.DrawOverlay(frame, analysis);
+        string filename = "detection_result.png";
+        Cv2.ImWrite(filename, overlay);
+        Console.WriteLine($"Saved annotated frame to: {filename}");
+    }
+
+    static void RunLiveDetection()
+    {
+        Console.WriteLine("Running live detection...");
+        Console.WriteLine("Press 'Q' in the window or Ctrl+C to stop.\n");
+
+        var region = GetCaptureRegion();
+        using var capture = new GdiScreenCapture(region);
+        using var analyzer = new GameAnalyzer();
+
+        const string windowName = "Jetty Boots - Live Detection";
+        Cv2.NamedWindow(windowName, WindowFlags.Normal);
+        Cv2.ResizeWindow(windowName, 800, 600);
+
+        int frameCount = 0;
+        var startTime = DateTime.Now;
+
+        while (true)
+        {
+            using var frame = capture.CaptureFrame();
+
+            if (frame == null)
+            {
+                Console.WriteLine("Frame capture failed");
+                continue;
+            }
+
+            // Analyze the frame
+            var analysis = analyzer.Analyze(frame);
+
+            // Draw overlay
+            using var overlay = analyzer.DrawOverlay(frame, analysis);
+
+            // Add FPS counter
+            frameCount++;
+            var elapsed = (DateTime.Now - startTime).TotalSeconds;
+            double fps = elapsed > 0 ? frameCount / elapsed : 0;
+
+            Cv2.PutText(overlay, $"FPS: {fps:F1}", new Point(10, overlay.Height - 20),
+                HersheyFonts.HersheySimplex, 0.6, new Scalar(255, 255, 255), 2);
+
+            // Show frame
+            Cv2.ImShow(windowName, overlay);
+
+            // Check for key press (wait 1ms)
+            int key = Cv2.WaitKey(1);
+            if (key == 'q' || key == 'Q' || key == 27) // Q or ESC
+            {
+                break;
+            }
+
+            // Print status every second
+            if (frameCount % 30 == 0)
+            {
+                Console.WriteLine($"Frame {frameCount}: Player={analysis.Player.Detected}, " +
+                    $"Obstacles={analysis.Obstacles.Obstacles.Count}, " +
+                    $"State={analysis.GameState.State}, " +
+                    $"FPS={fps:F1}");
+            }
+        }
+
+        Cv2.DestroyWindow(windowName);
+        var totalElapsed = (DateTime.Now - startTime).TotalSeconds;
+        double finalFps = totalElapsed > 0 ? frameCount / totalElapsed : 0;
+        Console.WriteLine($"\nProcessed {frameCount} frames in {totalElapsed:F1} seconds ({finalFps:F1} FPS)");
     }
 }
