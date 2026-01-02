@@ -1,3 +1,4 @@
+using JettyBoots.Decision;
 using JettyBoots.GameState;
 using JettyBoots.ScreenCapture;
 using OpenCvSharp;
@@ -24,9 +25,21 @@ class Program
             return;
         }
 
+        if (args.Contains("--test-decision"))
+        {
+            RunDecisionTest();
+            return;
+        }
+
         if (args.Contains("--live-detection"))
         {
             RunLiveDetection();
+            return;
+        }
+
+        if (args.Contains("--live-decision"))
+        {
+            RunLiveDecision();
             return;
         }
 
@@ -51,7 +64,9 @@ class Program
         Console.WriteLine("Options:");
         Console.WriteLine("  --test-capture    Test screen capture functionality");
         Console.WriteLine("  --test-detection  Test detection on a single frame");
+        Console.WriteLine("  --test-decision   Test decision engine with trajectory simulation");
         Console.WriteLine("  --live-detection  Run live detection with visual overlay");
+        Console.WriteLine("  --live-decision   Run live detection + decision making");
         Console.WriteLine("  --list-windows    List all visible windows");
         Console.WriteLine("  --find-game       Find Deep Rock Galactic window");
         Console.WriteLine("  --help            Show this help message\n");
@@ -245,6 +260,144 @@ class Program
         Console.WriteLine($"Saved annotated frame to: {filename}");
     }
 
+    static void RunDecisionTest()
+    {
+        Console.WriteLine("Running decision engine test...\n");
+
+        var engine = new DecisionEngine();
+        var trajectory = engine.Trajectory;
+
+        Console.WriteLine("=== Physics Parameters ===");
+        Console.WriteLine($"Gravity: {trajectory.Gravity} px/s²");
+        Console.WriteLine($"Jump Velocity: {trajectory.JumpVelocity} px/s");
+        Console.WriteLine($"Horizontal Speed: {trajectory.HorizontalSpeed} px/s");
+        Console.WriteLine();
+
+        // Test trajectory prediction
+        Console.WriteLine("=== Trajectory Prediction Test ===");
+        int startY = 300; // Middle of screen
+        Console.WriteLine($"Starting Y position: {startY}");
+        Console.WriteLine();
+
+        Console.WriteLine("Predicted positions (no jump):");
+        var noJumpTrajectory = trajectory.PredictTrajectory(startY, 1.0, 0.1);
+        foreach (var point in noJumpTrajectory)
+        {
+            Console.WriteLine($"  t={point.TimeOffset:F1}s: Y={point.Y:F0}, Velocity={point.VelocityY:F0}");
+        }
+        Console.WriteLine();
+
+        // Simulate a jump
+        trajectory.SimulateJump();
+        Console.WriteLine("Predicted positions (after jump):");
+        var jumpTrajectory = trajectory.PredictTrajectory(startY, 1.0, 0.1);
+        foreach (var point in jumpTrajectory)
+        {
+            Console.WriteLine($"  t={point.TimeOffset:F1}s: Y={point.Y:F0}, Velocity={point.VelocityY:F0}");
+        }
+        Console.WriteLine();
+
+        // Test optimal jump finding
+        Console.WriteLine("=== Optimal Jump Test ===");
+        trajectory.Reset();
+        int playerX = 100;
+        int playerY = 300;
+        int obstacleX = 400;
+        int gapTop = 200;
+        int gapBottom = 350;
+
+        Console.WriteLine($"Player position: ({playerX}, {playerY})");
+        Console.WriteLine($"Obstacle X: {obstacleX}");
+        Console.WriteLine($"Gap: Y={gapTop} to Y={gapBottom} (center: {(gapTop + gapBottom) / 2})");
+        Console.WriteLine();
+
+        var solution = trajectory.FindOptimalJumpTime(playerX, playerY, obstacleX, gapTop, gapBottom);
+        if (solution != null)
+        {
+            Console.WriteLine($"Solution found:");
+            Console.WriteLine($"  Jump at: {solution.JumpTime:F3}s");
+            Console.WriteLine($"  Time to obstacle: {solution.TimeToObstacle:F3}s");
+            Console.WriteLine($"  Predicted Y at obstacle: {solution.PredictedYAtObstacle:F0}");
+            Console.WriteLine($"  Confidence: {solution.Confidence:P1}");
+            Console.WriteLine($"  Should jump now: {solution.ShouldJumpNow()}");
+        }
+        else
+        {
+            Console.WriteLine("No solution found!");
+        }
+        Console.WriteLine();
+
+        // Test with simulated frame analysis
+        Console.WriteLine("=== Decision Making Test ===");
+        engine.Reset();
+
+        // Create a mock frame analysis
+        var mockAnalysis = new FrameAnalysis
+        {
+            Player = new PlayerDetectionResult
+            {
+                Detected = true,
+                X = 80,
+                Y = 280,
+                Width = 40,
+                Height = 40,
+                Confidence = 0.9
+            },
+            Obstacles = new ObstacleDetectionResult
+            {
+                Detected = true,
+                Obstacles = new List<Obstacle>
+                {
+                    new Obstacle
+                    {
+                        X = 400,
+                        Width = 60,
+                        GapTop = 200,
+                        GapBottom = 350
+                    }
+                },
+                Confidence = 0.8
+            },
+            GameState = new GameStateResult
+            {
+                State = GameState.GameState.Playing,
+                Confidence = 0.9
+            },
+            FrameWidth = 800,
+            FrameHeight = 600
+        };
+
+        Console.WriteLine("Mock game state:");
+        Console.WriteLine($"  Player: ({mockAnalysis.Player.CenterX}, {mockAnalysis.Player.CenterY})");
+        Console.WriteLine($"  Obstacle: X={mockAnalysis.Obstacles.Obstacles[0].X}, Gap={mockAnalysis.Obstacles.Obstacles[0].GapTop}-{mockAnalysis.Obstacles.Obstacles[0].GapBottom}");
+        Console.WriteLine();
+
+        // Process several frames
+        for (int i = 0; i < 5; i++)
+        {
+            var decision = engine.ProcessFrame(mockAnalysis);
+            var debug = engine.GetDebugInfo(mockAnalysis);
+
+            Console.WriteLine($"Frame {i + 1}:");
+            Console.WriteLine($"  Action: {decision.Action}");
+            Console.WriteLine($"  Reason: {decision.Reason}");
+            Console.WriteLine($"  Time to obstacle: {debug.TimeToObstacle:F2}s");
+            Console.WriteLine($"  Predicted Y at obstacle: {debug.PredictedYAtObstacle:F0}");
+            Console.WriteLine($"  Will hit obstacle: {debug.WillHitObstacle}");
+            Console.WriteLine();
+
+            // Simulate player falling
+            mockAnalysis = mockAnalysis with
+            {
+                Player = mockAnalysis.Player with { Y = mockAnalysis.Player.Y + 10 }
+            };
+
+            Thread.Sleep(100);
+        }
+
+        Console.WriteLine($"Total jumps made: {engine.JumpCount}");
+    }
+
     static void RunLiveDetection()
     {
         Console.WriteLine("Running live detection...");
@@ -309,5 +462,134 @@ class Program
         var totalElapsed = (DateTime.Now - startTime).TotalSeconds;
         double finalFps = totalElapsed > 0 ? frameCount / totalElapsed : 0;
         Console.WriteLine($"\nProcessed {frameCount} frames in {totalElapsed:F1} seconds ({finalFps:F1} FPS)");
+    }
+
+    static void RunLiveDecision()
+    {
+        Console.WriteLine("Running live decision making...");
+        Console.WriteLine("Press 'Q' in the window or Ctrl+C to stop.\n");
+        Console.WriteLine("NOTE: This is observation mode - no inputs are sent to the game.\n");
+
+        var region = GetCaptureRegion();
+        using var capture = new GdiScreenCapture(region);
+        using var analyzer = new GameAnalyzer();
+        var engine = new DecisionEngine();
+
+        const string windowName = "Jetty Boots - Decision Making";
+        Cv2.NamedWindow(windowName, WindowFlags.Normal);
+        Cv2.ResizeWindow(windowName, 800, 600);
+
+        int frameCount = 0;
+        var startTime = DateTime.Now;
+
+        while (true)
+        {
+            using var frame = capture.CaptureFrame();
+
+            if (frame == null)
+            {
+                Console.WriteLine("Frame capture failed");
+                continue;
+            }
+
+            // Analyze the frame
+            var analysis = analyzer.Analyze(frame);
+
+            // Make decision
+            var decision = engine.ProcessFrame(analysis);
+            var debug = engine.GetDebugInfo(analysis);
+
+            // Draw overlay
+            using var overlay = analyzer.DrawOverlay(frame, analysis);
+
+            // Add decision info
+            frameCount++;
+            var elapsed = (DateTime.Now - startTime).TotalSeconds;
+            double fps = elapsed > 0 ? frameCount / elapsed : 0;
+
+            // Draw decision indicator
+            var actionColor = decision.Action == GameAction.Jump
+                ? new Scalar(0, 255, 0)   // Green for jump
+                : new Scalar(255, 255, 255); // White for no action
+
+            Cv2.PutText(overlay, $"Action: {decision.Action}", new Point(10, 90),
+                HersheyFonts.HersheySimplex, 0.6, actionColor, 2);
+
+            if (decision.Reason.Length > 50)
+            {
+                Cv2.PutText(overlay, decision.Reason.Substring(0, 50) + "...", new Point(10, 115),
+                    HersheyFonts.HersheySimplex, 0.4, new Scalar(200, 200, 200), 1);
+            }
+            else
+            {
+                Cv2.PutText(overlay, decision.Reason, new Point(10, 115),
+                    HersheyFonts.HersheySimplex, 0.4, new Scalar(200, 200, 200), 1);
+            }
+
+            // Draw trajectory prediction if player detected
+            if (analysis.Player.Detected)
+            {
+                // Draw predicted positions
+                DrawTrajectoryPreview(overlay, analysis.Player.CenterX, analysis.Player.CenterY, engine.Trajectory);
+            }
+
+            // Draw debug info
+            Cv2.PutText(overlay, $"Jumps: {engine.JumpCount}", new Point(overlay.Width - 120, 30),
+                HersheyFonts.HersheySimplex, 0.5, new Scalar(255, 255, 255), 1);
+
+            if (debug.TimeToObstacle > 0)
+            {
+                Cv2.PutText(overlay, $"T2O: {debug.TimeToObstacle:F2}s", new Point(overlay.Width - 120, 50),
+                    HersheyFonts.HersheySimplex, 0.5, new Scalar(255, 255, 255), 1);
+            }
+
+            Cv2.PutText(overlay, $"FPS: {fps:F1}", new Point(10, overlay.Height - 20),
+                HersheyFonts.HersheySimplex, 0.6, new Scalar(255, 255, 255), 2);
+
+            // Show frame
+            Cv2.ImShow(windowName, overlay);
+
+            // Check for key press (wait 1ms)
+            int key = Cv2.WaitKey(1);
+            if (key == 'q' || key == 'Q' || key == 27)
+            {
+                break;
+            }
+
+            // Print decision every second
+            if (frameCount % 30 == 0)
+            {
+                Console.WriteLine($"Frame {frameCount}: Action={decision.Action}, " +
+                    $"Jumps={engine.JumpCount}, " +
+                    $"FPS={fps:F1}");
+            }
+        }
+
+        Cv2.DestroyWindow(windowName);
+        var totalElapsed = (DateTime.Now - startTime).TotalSeconds;
+        double finalFps = totalElapsed > 0 ? frameCount / totalElapsed : 0;
+        Console.WriteLine($"\nProcessed {frameCount} frames in {totalElapsed:F1} seconds ({finalFps:F1} FPS)");
+        Console.WriteLine($"Total jump decisions: {engine.JumpCount}");
+    }
+
+    static void DrawTrajectoryPreview(Mat frame, int playerX, int playerY, TrajectoryCalculator trajectory)
+    {
+        // Draw predicted trajectory as dots
+        var points = trajectory.PredictTrajectory(playerY, 0.5, 0.05);
+
+        for (int i = 1; i < points.Count; i++)
+        {
+            int x = playerX + (int)(i * trajectory.HorizontalSpeed * 0.05);
+            int y = (int)points[i].Y;
+
+            // Keep within frame bounds
+            if (x >= 0 && x < frame.Width && y >= 0 && y < frame.Height)
+            {
+                // Color based on time (fade from cyan to blue)
+                int alpha = 255 - (i * 20);
+                alpha = Math.Max(alpha, 50);
+                Cv2.Circle(frame, new Point(x, y), 3, new Scalar(alpha, alpha, 0), -1);
+            }
+        }
     }
 }
