@@ -10,6 +10,7 @@ public class MainForm : Form
     private Button? _stopButton;
     private ToolStripStatusLabel _statusLabel = null!;
     private CheckBox _dryRunCheckbox = null!;
+    private CheckBox _autoStartCheckbox = null!;
     private ComboBox _playStyleCombo = null!;
     private NumericUpDown _fpsNumeric = null!;
 
@@ -84,11 +85,26 @@ public class MainForm : Form
         playButton.Click += (s, e) => RunCommand(BuildPlayCommand());
         flowPanel.Controls.Add(playButton);
 
+        _autoStartCheckbox = new CheckBox
+        {
+            Text = "Auto-Start (focus & hold E)",
+            AutoSize = true,
+            Checked = true,  // Default to auto-start
+            Margin = new Padding(5, 2, 5, 2)
+        };
+        flowPanel.Controls.Add(_autoStartCheckbox);
+
         _dryRunCheckbox = new CheckBox
         {
             Text = "Dry Run (no inputs)",
             AutoSize = true,
             Margin = new Padding(5, 2, 5, 5)
+        };
+        _dryRunCheckbox.CheckedChanged += (s, e) =>
+        {
+            // Disable auto-start if dry run is checked
+            _autoStartCheckbox.Enabled = !_dryRunCheckbox.Checked;
+            if (_dryRunCheckbox.Checked) _autoStartCheckbox.Checked = false;
         };
         flowPanel.Controls.Add(_dryRunCheckbox);
 
@@ -261,12 +277,17 @@ public class MainForm : Form
 
         if (_dryRunCheckbox.Checked)
             args += " --dry-run";
+        else if (_autoStartCheckbox.Checked)
+            args += " --auto-start";
 
         if (_playStyleCombo.SelectedItem?.ToString() != "Balanced")
             args += $" --play-style {_playStyleCombo.SelectedItem}";
 
         if (_fpsNumeric.Value != 30)
             args += $" --fps {_fpsNumeric.Value}";
+
+        // Always use mouse click for Jetty Boots
+        args += " --use-mouse";
 
         return args;
     }
@@ -379,7 +400,16 @@ public class MainForm : Form
 PLAY COMMANDS
 ─────────────────────────────────────────────────────────────────────────
   --play                  Run the auto-player (sends inputs to game)
+  --play --auto-start     Auto-focus window, hold E, and start minigame
   --play --dry-run        Run auto-player without sending inputs
+  --use-mouse             Use mouse click for jumping (recommended)
+
+HOW TO USE
+─────────────────────────────────────────────────────────────────────────
+  1. Start Deep Rock Galactic and go to the Space Rig
+  2. Stand in front of the Jetty Boots arcade machine
+  3. Click 'Play Auto-Player' with 'Auto-Start' checked
+  4. The bot will: focus the game, hold E to start, then play!
 
 SETUP & CALIBRATION
 ─────────────────────────────────────────────────────────────────────────

@@ -99,7 +99,8 @@ class Program
             if (args.Contains("--play"))
             {
                 bool dryRun = args.Contains("--dry-run") || _configManager.Config.Input.DryRun;
-                RunAutoPlayer(dryRun);
+                bool autoStart = args.Contains("--auto-start");
+                RunAutoPlayer(dryRun, autoStart);
                 return;
             }
 
@@ -166,6 +167,7 @@ class Program
         Console.WriteLine("Commands:");
         Console.WriteLine("  --play              Run the auto-player (sends inputs to game)");
         Console.WriteLine("  --play --dry-run    Run auto-player without sending inputs");
+        Console.WriteLine("  --play --auto-start Auto-focus window, hold E, and start minigame");
         Console.WriteLine("  --calibrate         Run the calibration wizard");
         Console.WriteLine("  --test-capture      Test screen capture functionality");
         Console.WriteLine("  --test-detection    Test detection on a single frame");
@@ -832,23 +834,54 @@ class Program
         }
     }
 
-    static void RunAutoPlayer(bool dryRun)
+    static void RunAutoPlayer(bool dryRun, bool autoStart = false)
     {
         Console.WriteLine("=== Jetty Boots Auto-Player ===\n");
+
+        // Find game window first
+        var gameHwnd = WindowHelper.FindDeepRockGalacticWindow();
 
         if (dryRun)
         {
             Console.WriteLine("*** DRY RUN MODE - No inputs will be sent ***\n");
         }
+        else if (autoStart)
+        {
+            Console.WriteLine("*** AUTO-START MODE - Will focus window and start minigame ***\n");
+
+            if (gameHwnd == IntPtr.Zero)
+            {
+                Console.WriteLine("ERROR: Deep Rock Galactic window not found!");
+                Console.WriteLine("Make sure the game is running and visible.");
+                return;
+            }
+
+            // Perform the startup sequence
+            var inputSimulator = new GameInputSimulator();
+            inputSimulator.UseMouseClick = true; // Use mouse for Jetty Boots
+
+            Console.WriteLine("Starting in 3 seconds... Make sure you're standing at the arcade machine!");
+            Console.WriteLine("Press Ctrl+C to cancel.\n");
+            Thread.Sleep(3000);
+
+            if (!inputSimulator.PerformStartupSequence(gameHwnd))
+            {
+                Console.WriteLine("ERROR: Startup sequence failed!");
+                return;
+            }
+
+            Console.WriteLine("\nMinigame should now be running. Starting auto-player...\n");
+        }
         else
         {
             Console.WriteLine("*** LIVE MODE - Inputs WILL be sent to game ***");
             Console.WriteLine("Make sure Deep Rock Galactic is focused!\n");
+            Console.WriteLine("TIP: Use --auto-start to automatically focus and start the minigame.\n");
             Console.WriteLine("Press Enter to start, or Ctrl+C to cancel...");
             Console.ReadLine();
         }
 
-        _logger?.LogInfo($"Starting auto-player (Dry Run: {dryRun})");
+        _logger?.LogInfo($"Starting auto-player (Dry Run: {dryRun}, Auto Start: {autoStart})");
 
         var region = GetCaptureRegion();
 
