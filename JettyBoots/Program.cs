@@ -1,6 +1,10 @@
+using JettyBoots.Calibration;
+using JettyBoots.Configuration;
+using JettyBoots.Debug;
 using JettyBoots.Decision;
 using JettyBoots.GameState;
 using JettyBoots.Input;
+using JettyBoots.Logging;
 using JettyBoots.ScreenCapture;
 using OpenCvSharp;
 using Point = OpenCvSharp.Point;
@@ -9,80 +13,234 @@ namespace JettyBoots;
 
 class Program
 {
+    private static ConfigurationManager _configManager = new();
+    private static GameLogger? _logger;
+
     static void Main(string[] args)
     {
         Console.WriteLine("=== Jetty Boots Auto-Player ===");
         Console.WriteLine("Automated player for the Jetty Boots minigame in Deep Rock Galactic\n");
 
-        if (args.Contains("--test-capture"))
+        // Load configuration
+        LoadConfiguration(args);
+
+        // Initialize logging
+        _logger = new GameLogger(_configManager.Config.Logging);
+
+        try
         {
-            RunCaptureTest();
-            return;
+            // Parse command and execute
+            if (args.Contains("--help") || args.Contains("-h"))
+            {
+                ShowHelp();
+                return;
+            }
+
+            if (args.Contains("--test-capture"))
+            {
+                RunCaptureTest();
+                return;
+            }
+
+            if (args.Contains("--test-detection"))
+            {
+                RunDetectionTest();
+                return;
+            }
+
+            if (args.Contains("--test-decision"))
+            {
+                RunDecisionTest();
+                return;
+            }
+
+            if (args.Contains("--live-detection"))
+            {
+                RunLiveDetection();
+                return;
+            }
+
+            if (args.Contains("--live-decision"))
+            {
+                RunLiveDecision();
+                return;
+            }
+
+            if (args.Contains("--list-windows"))
+            {
+                ListWindows();
+                return;
+            }
+
+            if (args.Contains("--find-game"))
+            {
+                FindGameWindow();
+                return;
+            }
+
+            if (args.Contains("--calibrate"))
+            {
+                RunCalibration();
+                return;
+            }
+
+            if (args.Contains("--show-config"))
+            {
+                _configManager.PrintConfig();
+                return;
+            }
+
+            if (args.Contains("--create-config"))
+            {
+                CreateDefaultConfig();
+                return;
+            }
+
+            if (args.Contains("--play"))
+            {
+                bool dryRun = args.Contains("--dry-run") || _configManager.Config.Input.DryRun;
+                RunAutoPlayer(dryRun);
+                return;
+            }
+
+            ShowHelp();
+        }
+        finally
+        {
+            _logger?.Dispose();
+        }
+    }
+
+    static void LoadConfiguration(string[] args)
+    {
+        // Check for custom config file
+        string? configPath = null;
+        for (int i = 0; i < args.Length - 1; i++)
+        {
+            if (args[i] == "--config" || args[i] == "-c")
+            {
+                configPath = args[i + 1];
+                break;
+            }
         }
 
-        if (args.Contains("--test-detection"))
+        // Load config
+        if (!string.IsNullOrEmpty(configPath))
         {
-            RunDetectionTest();
-            return;
+            if (_configManager.Load(configPath))
+            {
+                Console.WriteLine($"Loaded configuration from: {configPath}");
+            }
+            else
+            {
+                Console.WriteLine($"Warning: Failed to load config from {configPath}");
+                foreach (var error in _configManager.ValidationErrors)
+                {
+                    Console.WriteLine($"  - {error}");
+                }
+                Console.WriteLine("Using default configuration.");
+            }
+        }
+        else if (File.Exists(ConfigurationManager.GetDefaultConfigPath()))
+        {
+            if (_configManager.LoadDefault())
+            {
+                Console.WriteLine($"Loaded configuration from: {ConfigurationManager.GetDefaultConfigPath()}");
+            }
+            else
+            {
+                foreach (var error in _configManager.ValidationErrors)
+                {
+                    Console.WriteLine($"  Warning: {error}");
+                }
+            }
         }
 
-        if (args.Contains("--test-decision"))
-        {
-            RunDecisionTest();
-            return;
-        }
-
-        if (args.Contains("--live-detection"))
-        {
-            RunLiveDetection();
-            return;
-        }
-
-        if (args.Contains("--live-decision"))
-        {
-            RunLiveDecision();
-            return;
-        }
-
-        if (args.Contains("--list-windows"))
-        {
-            ListWindows();
-            return;
-        }
-
-        if (args.Contains("--find-game"))
-        {
-            FindGameWindow();
-            return;
-        }
-
-        if (args.Contains("--play"))
-        {
-            bool dryRun = args.Contains("--dry-run");
-            RunAutoPlayer(dryRun);
-            return;
-        }
-
-        ShowHelp();
+        // Apply command-line overrides
+        _configManager.ApplyCommandLineOverrides(args);
     }
 
     static void ShowHelp()
     {
         Console.WriteLine("Usage: JettyBoots [options]\n");
-        Console.WriteLine("Options:");
-        Console.WriteLine("  --play            Run the auto-player (sends inputs to game)");
-        Console.WriteLine("  --play --dry-run  Run auto-player without sending inputs");
-        Console.WriteLine("  --test-capture    Test screen capture functionality");
-        Console.WriteLine("  --test-detection  Test detection on a single frame");
-        Console.WriteLine("  --test-decision   Test decision engine with trajectory simulation");
-        Console.WriteLine("  --live-detection  Run live detection with visual overlay");
-        Console.WriteLine("  --live-decision   Run live detection + decision making");
-        Console.WriteLine("  --list-windows    List all visible windows");
-        Console.WriteLine("  --find-game       Find Deep Rock Galactic window");
-        Console.WriteLine("  --help            Show this help message\n");
+        Console.WriteLine("Commands:");
+        Console.WriteLine("  --play              Run the auto-player (sends inputs to game)");
+        Console.WriteLine("  --play --dry-run    Run auto-player without sending inputs");
+        Console.WriteLine("  --calibrate         Run the calibration wizard");
+        Console.WriteLine("  --test-capture      Test screen capture functionality");
+        Console.WriteLine("  --test-detection    Test detection on a single frame");
+        Console.WriteLine("  --test-decision     Test decision engine with trajectory simulation");
+        Console.WriteLine("  --live-detection    Run live detection with visual overlay");
+        Console.WriteLine("  --live-decision     Run live detection + decision making");
+        Console.WriteLine("  --list-windows      List all visible windows");
+        Console.WriteLine("  --find-game         Find Deep Rock Galactic window");
+        Console.WriteLine();
+        Console.WriteLine("Configuration:");
+        Console.WriteLine("  --config, -c <file> Load configuration from specified file");
+        Console.WriteLine("  --show-config       Display current configuration");
+        Console.WriteLine("  --create-config     Create default configuration file");
+        Console.WriteLine();
+        Console.WriteLine("Configuration Overrides:");
+        Console.WriteLine("  --fps <value>           Target frames per second");
+        Console.WriteLine("  --safety-margin <px>    Safety margin from gap edges");
+        Console.WriteLine("  --play-style <style>    Play style: Safe, Balanced, Aggressive");
+        Console.WriteLine("  --jump-key <key>        Key for jumping (e.g., SPACE, UP)");
+        Console.WriteLine("  --use-mouse             Use mouse click instead of keyboard");
+        Console.WriteLine("  --no-debug              Disable debug overlay");
+        Console.WriteLine("  --no-debug-window       Disable debug window");
+        Console.WriteLine("  --save-frames           Save debug frames to disk");
+        Console.WriteLine("  --log-level <level>     Log level: Verbose, Debug, Information, Warning, Error");
+        Console.WriteLine("  --log-decisions         Log individual decisions for analysis");
+        Console.WriteLine("  --no-logging            Disable all logging");
+        Console.WriteLine();
+        Console.WriteLine("  --help, -h          Show this help message");
+        Console.WriteLine();
         Console.WriteLine("Press any key to run a quick capture test...");
         Console.ReadKey(true);
         RunCaptureTest();
+    }
+
+    static void CreateDefaultConfig()
+    {
+        var path = ConfigurationManager.GetDefaultConfigPath();
+        if (File.Exists(path))
+        {
+            Console.Write($"Configuration file already exists at {path}. Overwrite? (y/n): ");
+            var response = Console.ReadLine()?.Trim().ToLower();
+            if (response != "y" && response != "yes")
+            {
+                Console.WriteLine("Cancelled.");
+                return;
+            }
+        }
+
+        _configManager.Config = JettyBootsConfig.Default;
+        if (_configManager.Save(path))
+        {
+            Console.WriteLine($"Default configuration created at: {path}");
+        }
+        else
+        {
+            Console.WriteLine("Failed to create configuration file.");
+        }
+    }
+
+    static void RunCalibration()
+    {
+        Console.WriteLine("Starting calibration wizard...\n");
+
+        var region = GetCaptureRegion();
+        using var capture = new GdiScreenCapture(region);
+        using var wizard = new CalibrationWizard(_configManager, capture);
+
+        if (wizard.Run())
+        {
+            Console.WriteLine("\nCalibration completed successfully!");
+        }
+        else
+        {
+            Console.WriteLine("\nCalibration was cancelled or failed.");
+        }
     }
 
     static void ListWindows()
@@ -131,6 +289,16 @@ class Program
 
     static CaptureRegion GetCaptureRegion()
     {
+        var config = _configManager.Config.Capture;
+
+        // Use custom region if configured
+        if (config.UseCustomRegion)
+        {
+            Console.WriteLine($"Using configured region: {config.RegionWidth}x{config.RegionHeight} at ({config.RegionX}, {config.RegionY})");
+            return new CaptureRegion(config.RegionX, config.RegionY, config.RegionWidth, config.RegionHeight);
+        }
+
+        // Try to find game window
         var gameHwnd = WindowHelper.FindDeepRockGalacticWindow();
 
         if (gameHwnd != IntPtr.Zero)
@@ -145,6 +313,59 @@ class Program
 
         Console.WriteLine("Game not found. Capturing screen region (800x600) for testing...");
         return new CaptureRegion(0, 0, 800, 600);
+    }
+
+    static void ApplyConfigToAnalyzer(GameAnalyzer analyzer)
+    {
+        var detection = _configManager.Config.Detection;
+
+        var config = new GameState.DetectionConfig
+        {
+            PlayerColorLower = new Scalar(
+                detection.PlayerColor.HueLower,
+                detection.PlayerColor.SaturationLower,
+                detection.PlayerColor.ValueLower),
+            PlayerColorUpper = new Scalar(
+                detection.PlayerColor.HueUpper,
+                detection.PlayerColor.SaturationUpper,
+                detection.PlayerColor.ValueUpper),
+            ObstacleColorLower = new Scalar(
+                detection.ObstacleColor.HueLower,
+                detection.ObstacleColor.SaturationLower,
+                detection.ObstacleColor.ValueLower),
+            ObstacleColorUpper = new Scalar(
+                detection.ObstacleColor.HueUpper,
+                detection.ObstacleColor.SaturationUpper,
+                detection.ObstacleColor.ValueUpper)
+        };
+
+        analyzer.Configure(config);
+    }
+
+    static void ApplyConfigToDecisionEngine(DecisionEngine engine)
+    {
+        var gameplay = _configManager.Config.Gameplay;
+        var physics = gameplay.Physics;
+
+        // Apply physics settings
+        engine.Trajectory.SetPhysics(
+            physics.Gravity,
+            physics.JumpVelocity,
+            physics.TerminalVelocity,
+            physics.HorizontalSpeed);
+
+        // Apply play style
+        var playStyle = gameplay.PlayStyle switch
+        {
+            PlayStyleOption.Safe => PlayStyle.Safe,
+            PlayStyleOption.Aggressive => PlayStyle.Aggressive,
+            _ => PlayStyle.Balanced
+        };
+        engine.SetPlayStyle(playStyle);
+
+        // Apply jump decider settings
+        engine.JumpDecider.SetSafetyMargin(gameplay.SafetyMargin);
+        engine.JumpDecider.SetBoundaries(gameplay.FloorY, gameplay.CeilingY);
     }
 
     static void RunCaptureTest()
@@ -205,6 +426,8 @@ class Program
         var region = GetCaptureRegion();
         using var capture = new GdiScreenCapture(region);
         using var analyzer = new GameAnalyzer();
+
+        ApplyConfigToAnalyzer(analyzer);
 
         // Capture a single frame
         using var frame = capture.CaptureFrame();
@@ -275,10 +498,12 @@ class Program
         Console.WriteLine("Running decision engine test...\n");
 
         var engine = new DecisionEngine();
+        ApplyConfigToDecisionEngine(engine);
+
         var trajectory = engine.Trajectory;
 
         Console.WriteLine("=== Physics Parameters ===");
-        Console.WriteLine($"Gravity: {trajectory.Gravity} px/s²");
+        Console.WriteLine($"Gravity: {trajectory.Gravity} px/s^2");
         Console.WriteLine($"Jump Velocity: {trajectory.JumpVelocity} px/s");
         Console.WriteLine($"Horizontal Speed: {trajectory.HorizontalSpeed} px/s");
         Console.WriteLine();
@@ -417,6 +642,8 @@ class Program
         using var capture = new GdiScreenCapture(region);
         using var analyzer = new GameAnalyzer();
 
+        ApplyConfigToAnalyzer(analyzer);
+
         const string windowName = "Jetty Boots - Live Detection";
         Cv2.NamedWindow(windowName, WindowFlags.Normal);
         Cv2.ResizeWindow(windowName, 800, 600);
@@ -485,6 +712,9 @@ class Program
         using var analyzer = new GameAnalyzer();
         var engine = new DecisionEngine();
 
+        ApplyConfigToAnalyzer(analyzer);
+        ApplyConfigToDecisionEngine(engine);
+
         const string windowName = "Jetty Boots - Decision Making";
         Cv2.NamedWindow(windowName, WindowFlags.Normal);
         Cv2.ResizeWindow(windowName, 800, 600);
@@ -539,7 +769,6 @@ class Program
             // Draw trajectory prediction if player detected
             if (analysis.Player.Detected)
             {
-                // Draw predicted positions
                 DrawTrajectoryPreview(overlay, analysis.Player.CenterX, analysis.Player.CenterY, engine.Trajectory);
             }
 
@@ -619,31 +848,57 @@ class Program
             Console.ReadLine();
         }
 
+        _logger?.LogInfo($"Starting auto-player (Dry Run: {dryRun})");
+
         var region = GetCaptureRegion();
 
         if (region.Width == 800 && region.Height == 600 && region.X == 0 && region.Y == 0)
         {
             Console.WriteLine("\nWARNING: Game window not found. Using test region.");
             Console.WriteLine("The auto-player may not work correctly.\n");
+            _logger?.LogWarning("Game window not found, using default test region");
         }
 
         using var capture = new GdiScreenCapture(region);
         using var gameLoop = new GameLoop(capture);
 
-        // Configure the game loop
+        // Configure the game loop from config
         gameLoop.DryRun = dryRun;
-        gameLoop.TargetFps = 30;
-        gameLoop.ShowDebugWindow = true;
+        gameLoop.TargetFps = _configManager.Config.Capture.TargetFps;
+        gameLoop.ShowDebugWindow = _configManager.Config.Debug.ShowDebugWindow;
+
+        // Apply configuration to components
+        ApplyConfigToAnalyzer(gameLoop.Analyzer);
+        ApplyConfigToDecisionEngine(gameLoop.DecisionEngine);
+
+        // Create debug overlay
+        using var debugOverlay = new DebugOverlay(_configManager.Config.Debug);
 
         // Subscribe to events
-        gameLoop.OnLog += message => Console.WriteLine(message);
+        gameLoop.OnLog += message =>
+        {
+            Console.WriteLine(message);
+            _logger?.LogInfo(message);
+        };
 
         gameLoop.OnStatusUpdate += status =>
         {
-            // Print status every 30 frames (once per second at 30 FPS)
+            // Log detection
+            _logger?.LogDetection(status.Analysis);
+
+            // Log decisions
+            if (status.Decision.Action != GameAction.None)
+            {
+                _logger?.LogDecision(status.Decision, status.DebugInfo);
+            }
+
+            // Log performance periodically
             if (status.FrameNumber % 30 == 0)
             {
                 var stats = status.Statistics;
+                _logger?.LogPerformance(stats.AverageFps, status.Analysis.AnalysisTimeMs, 0);
+                debugOverlay.UpdateFps(stats.AverageFps);
+
                 Console.WriteLine($"[Stats] Frame: {stats.FrameCount}, Jumps: {stats.JumpsSent}, " +
                     $"Games: {stats.GamesPlayed}, FPS: {stats.AverageFps:F1}");
             }
@@ -661,6 +916,8 @@ class Program
         Console.WriteLine("Starting game loop...");
         Console.WriteLine("Press 'Q' in debug window or Ctrl+C to stop.\n");
 
+        _logger?.LogGameStart();
+
         try
         {
             gameLoop.Run(cts.Token);
@@ -670,6 +927,8 @@ class Program
             // Normal cancellation
         }
 
+        _logger?.LogGameEnd(null, 0);
+
         var finalStats = gameLoop.Statistics;
         Console.WriteLine("\n=== Final Statistics ===");
         Console.WriteLine($"Total frames: {finalStats.FrameCount}");
@@ -677,5 +936,11 @@ class Program
         Console.WriteLine($"Games played: {finalStats.GamesPlayed}");
         Console.WriteLine($"Run time: {finalStats.RunTime:mm\\:ss}");
         Console.WriteLine($"Average FPS: {finalStats.AverageFps:F1}");
+
+        // Print session report
+        if (_logger != null)
+        {
+            Console.WriteLine("\n" + _logger.GenerateSessionReport());
+        }
     }
 }

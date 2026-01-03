@@ -1,5 +1,6 @@
 # Build results
-[Dd]ebug/
+**/[Bb]in/
+**/[Oo]bj/
 [Dd]ebugPublic/
 [Rr]elease/
 [Rr]eleases/
@@ -9,10 +10,11 @@ x86/
 [Aa][Rr][Mm]/
 [Aa][Rr][Mm]64/
 bld/
-[Bb]in/
-[Oo]bj/
 [Ll]og/
 [Ll]ogs/
+
+# Unignore source code Debug folder (not build output)
+!**/JettyBoots/Debug/
 
 # Visual Studio files
 .vs/
@@ -39,8 +41,7 @@ project.lock.json
 project.fragment.lock.json
 artifacts/
 
-# Build results
-[Dd]ebug/
+# Build results (at project root)
 [Rr]elease/
 
 # MSTest
@@ -69,7 +70,9 @@ $RECYCLE.BIN/
 ._*
 
 # Application specific
-calibration/
 logs/
 *.log
 config.local.json
+
+# Unignore source code folders (not build output)
+!**/JettyBoots/Calibration/
