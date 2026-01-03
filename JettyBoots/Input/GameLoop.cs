@@ -32,10 +32,20 @@ public class GameLoop : IDisposable
     // Configuration
     private int _targetFps = 30;
     private bool _showDebugWindow = true;
+    private bool _verboseLogging = false;
 
     // Events
     public event Action<LoopStatus>? OnStatusUpdate;
     public event Action<string>? OnLog;
+
+    /// <summary>
+    /// Gets or sets whether to enable verbose logging for debugging.
+    /// </summary>
+    public bool VerboseLogging
+    {
+        get => _verboseLogging;
+        set => _verboseLogging = value;
+    }
 
     public GameLoop(IScreenCapture capture)
     {
@@ -120,9 +130,11 @@ public class GameLoop : IDisposable
             Cv2.ResizeWindow(windowName, 800, 600);
         }
 
-        Log($"Game loop started (Target FPS: {_targetFps}, Dry Run: {_dryRun})");
+        Log($"Game loop started (Target FPS: {_targetFps}, Dry Run: {_dryRun}, Verbose: {_verboseLogging})");
+        Log($"Input config: UseMouseClick={_inputSimulator.UseMouseClick}, JumpKey={_inputSimulator.JumpKey}");
 
         GameState.GameState lastGameState = GameState.GameState.Unknown;
+        int verboseLogCounter = 0;
 
         try
         {
@@ -149,6 +161,16 @@ public class GameLoop : IDisposable
                 // Analyze frame
                 var analysis = _analyzer.Analyze(frame);
 
+                // Verbose logging every 30 frames (1 second at 30fps)
+                verboseLogCounter++;
+                if (_verboseLogging && verboseLogCounter % 30 == 0)
+                {
+                    Log($"[VERBOSE] Frame {_frameCount}: " +
+                        $"Player={analysis.Player.Detected} (conf={analysis.Player.Confidence:F2}, pos=({analysis.Player.CenterX},{analysis.Player.CenterY})), " +
+                        $"Obstacles={analysis.Obstacles.Obstacles.Count}, " +
+                        $"GameState={analysis.GameState.State}");
+                }
+
                 // Track game state changes
                 if (analysis.GameState.State != lastGameState)
                 {
@@ -158,6 +180,15 @@ public class GameLoop : IDisposable
 
                 // Make decision
                 var decision = _decisionEngine.ProcessFrame(analysis);
+
+                // Log every jump decision
+                if (_verboseLogging && decision.Action == GameAction.Jump)
+                {
+                    var debug = _decisionEngine.GetDebugInfo(analysis);
+                    Log($"[JUMP] Frame {_frameCount}: {decision.Reason} | " +
+                        $"TimeToObs={debug.TimeToObstacle:F2}s, PredY={debug.PredictedYAtObstacle:F0}, " +
+                        $"WillHit={debug.WillHitObstacle}");
+                }
 
                 // Execute action
                 ExecuteAction(decision);
@@ -239,22 +270,51 @@ public class GameLoop : IDisposable
     private void ExecuteAction(ActionDecision decision)
     {
         if (_dryRun)
+        {
+            if (_verboseLogging && decision.Action != GameAction.None)
+            {
+                Log($"[DRY RUN] Would execute: {decision.Action}");
+            }
             return;
+        }
 
         switch (decision.Action)
         {
             case GameAction.Jump:
+                if (_verboseLogging)
+                {
+                    Log($"[INPUT] Sending jump (UseMouseClick={_inputSimulator.UseMouseClick})...");
+                }
                 if (_inputSimulator.SendJump())
                 {
                     _jumpsSent++;
+                    if (_verboseLogging)
+                    {
+                        Log($"[INPUT] Jump sent successfully! Total jumps: {_jumpsSent}");
+                    }
+                }
+                else
+                {
+                    if (_verboseLogging)
+                    {
+                        Log($"[INPUT] Jump FAILED (too fast? interval not met)");
+                    }
                 }
                 break;
 
             case GameAction.StartGame:
+                if (_verboseLogging)
+                {
+                    Log($"[INPUT] Sending StartGame...");
+                }
                 _inputSimulator.SendStartGame();
                 break;
 
             case GameAction.Restart:
+                if (_verboseLogging)
+                {
+                    Log($"[INPUT] Sending Restart...");
+                }
                 _inputSimulator.SendStartGame();
                 break;
         }

@@ -11,6 +11,7 @@ public class MainForm : Form
     private ToolStripStatusLabel _statusLabel = null!;
     private CheckBox _dryRunCheckbox = null!;
     private CheckBox _autoStartCheckbox = null!;
+    private CheckBox _verboseCheckbox = null!;
     private ComboBox _playStyleCombo = null!;
     private NumericUpDown _fpsNumeric = null!;
 
@@ -107,6 +108,15 @@ public class MainForm : Form
             if (_dryRunCheckbox.Checked) _autoStartCheckbox.Checked = false;
         };
         flowPanel.Controls.Add(_dryRunCheckbox);
+
+        _verboseCheckbox = new CheckBox
+        {
+            Text = "Verbose Logging (debug)",
+            AutoSize = true,
+            Checked = true,  // Default to verbose for debugging
+            Margin = new Padding(5, 2, 5, 5)
+        };
+        flowPanel.Controls.Add(_verboseCheckbox);
 
         // Play Style
         var stylePanel = new FlowLayoutPanel { FlowDirection = FlowDirection.LeftToRight, AutoSize = true, Margin = new Padding(5, 2, 5, 5) };
@@ -279,6 +289,9 @@ public class MainForm : Form
             args += " --dry-run";
         else if (_autoStartCheckbox.Checked)
             args += " --auto-start";
+
+        if (_verboseCheckbox.Checked)
+            args += " --verbose";
 
         if (_playStyleCombo.SelectedItem?.ToString() != "Balanced")
             args += $" --play-style {_playStyleCombo.SelectedItem}";

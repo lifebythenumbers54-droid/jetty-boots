@@ -100,7 +100,8 @@ class Program
             {
                 bool dryRun = args.Contains("--dry-run") || _configManager.Config.Input.DryRun;
                 bool autoStart = args.Contains("--auto-start");
-                RunAutoPlayer(dryRun, autoStart);
+                bool verbose = args.Contains("--verbose") || args.Contains("-v");
+                RunAutoPlayer(dryRun, autoStart, verbose);
                 return;
             }
 
@@ -168,6 +169,7 @@ class Program
         Console.WriteLine("  --play              Run the auto-player (sends inputs to game)");
         Console.WriteLine("  --play --dry-run    Run auto-player without sending inputs");
         Console.WriteLine("  --play --auto-start Auto-focus window, hold E, and start minigame");
+        Console.WriteLine("  --play --verbose    Enable detailed logging for debugging");
         Console.WriteLine("  --calibrate         Run the calibration wizard");
         Console.WriteLine("  --test-capture      Test screen capture functionality");
         Console.WriteLine("  --test-detection    Test detection on a single frame");
@@ -834,9 +836,14 @@ class Program
         }
     }
 
-    static void RunAutoPlayer(bool dryRun, bool autoStart = false)
+    static void RunAutoPlayer(bool dryRun, bool autoStart = false, bool verbose = false)
     {
         Console.WriteLine("=== Jetty Boots Auto-Player ===\n");
+
+        if (verbose)
+        {
+            Console.WriteLine("*** VERBOSE LOGGING ENABLED ***\n");
+        }
 
         // Find game window first
         var gameHwnd = WindowHelper.FindDeepRockGalacticWindow();
@@ -881,7 +888,7 @@ class Program
             Console.ReadLine();
         }
 
-        _logger?.LogInfo($"Starting auto-player (Dry Run: {dryRun}, Auto Start: {autoStart})");
+        _logger?.LogInfo($"Starting auto-player (Dry Run: {dryRun}, Auto Start: {autoStart}, Verbose: {verbose})");
 
         var region = GetCaptureRegion();
 
@@ -899,6 +906,10 @@ class Program
         gameLoop.DryRun = dryRun;
         gameLoop.TargetFps = _configManager.Config.Capture.TargetFps;
         gameLoop.ShowDebugWindow = _configManager.Config.Debug.ShowDebugWindow;
+        gameLoop.VerboseLogging = verbose;
+
+        // Configure input simulator to use mouse click
+        gameLoop.InputSimulator.UseMouseClick = true;
 
         // Apply configuration to components
         ApplyConfigToAnalyzer(gameLoop.Analyzer);
