@@ -84,6 +84,35 @@ class Program
                 return;
             }
 
+            if (args.Contains("--test-screenshots"))
+            {
+                // Test screenshot detection
+                string folder = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "Screenshots");
+
+                // Check if a specific file/folder was provided
+                var pathArg = args.SkipWhile(a => a != "--test-screenshots").Skip(1).FirstOrDefault();
+                if (!string.IsNullOrEmpty(pathArg) && !pathArg.StartsWith("--"))
+                {
+                    if (File.Exists(pathArg))
+                    {
+                        TestScreenshotDetection.RunTest(pathArg, verbose: true);
+                    }
+                    else if (Directory.Exists(pathArg))
+                    {
+                        TestScreenshotDetection.RunTestOnFolder(pathArg);
+                    }
+                    else
+                    {
+                        Console.WriteLine($"Path not found: {pathArg}");
+                    }
+                }
+                else
+                {
+                    TestScreenshotDetection.RunTestOnFolder(folder);
+                }
+                return;
+            }
+
             if (args.Contains("--show-config"))
             {
                 _configManager.PrintConfig();
@@ -101,7 +130,8 @@ class Program
                 bool dryRun = args.Contains("--dry-run") || _configManager.Config.Input.DryRun;
                 bool autoStart = args.Contains("--auto-start");
                 bool verbose = args.Contains("--verbose") || args.Contains("-v");
-                RunAutoPlayer(dryRun, autoStart, verbose);
+                bool screenshots = args.Contains("--screenshots");
+                RunAutoPlayer(dryRun, autoStart, verbose, screenshots);
                 return;
             }
 
@@ -170,12 +200,15 @@ class Program
         Console.WriteLine("  --play --dry-run    Run auto-player without sending inputs");
         Console.WriteLine("  --play --auto-start Auto-focus window, hold E, and start minigame");
         Console.WriteLine("  --play --verbose    Enable detailed logging for debugging");
+        Console.WriteLine("  --play --screenshots Capture screenshots every 500ms for debugging");
         Console.WriteLine("  --calibrate         Run the calibration wizard");
         Console.WriteLine("  --test-capture      Test screen capture functionality");
         Console.WriteLine("  --test-detection    Test detection on a single frame");
         Console.WriteLine("  --test-decision     Test decision engine with trajectory simulation");
         Console.WriteLine("  --live-detection    Run live detection with visual overlay");
         Console.WriteLine("  --live-decision     Run live detection + decision making");
+        Console.WriteLine("  --test-screenshots  Test player detection on saved screenshots");
+        Console.WriteLine("  --test-screenshots [path]  Test on specific file or folder");
         Console.WriteLine("  --list-windows      List all visible windows");
         Console.WriteLine("  --find-game         Find Deep Rock Galactic window");
         Console.WriteLine();
@@ -836,13 +869,19 @@ class Program
         }
     }
 
-    static void RunAutoPlayer(bool dryRun, bool autoStart = false, bool verbose = false)
+    static void RunAutoPlayer(bool dryRun, bool autoStart = false, bool verbose = false, bool screenshots = false)
     {
         Console.WriteLine("=== Jetty Boots Auto-Player ===\n");
 
         if (verbose)
         {
             Console.WriteLine("*** VERBOSE LOGGING ENABLED ***\n");
+        }
+
+        if (screenshots)
+        {
+            Console.WriteLine("*** SCREENSHOT CAPTURE ENABLED ***");
+            Console.WriteLine("Screenshots will be saved every 500ms to: JettyBoots/Screenshots/\n");
         }
 
         // Find game window first
@@ -877,7 +916,10 @@ class Program
                 return;
             }
 
-            Console.WriteLine("\nMinigame should now be running. Starting auto-player...\n");
+            Console.WriteLine("\nMinigame should now be running.");
+            Console.WriteLine("Waiting 3 seconds for detection window to initialize...\n");
+            Thread.Sleep(3000);
+            Console.WriteLine("Starting auto-player...\n");
         }
         else
         {
@@ -908,8 +950,21 @@ class Program
         gameLoop.ShowDebugWindow = _configManager.Config.Debug.ShowDebugWindow;
         gameLoop.VerboseLogging = verbose;
 
-        // Configure input simulator to use mouse click
+        // Configure screenshot capture for debugging
+        if (screenshots)
+        {
+            // Use absolute path for screenshots folder
+            string screenshotPath = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "Screenshots");
+            gameLoop.CaptureScreenshots = true;
+            gameLoop.ScreenshotFolder = screenshotPath;
+            gameLoop.ScreenshotIntervalMs = 500;
+            gameLoop.ClearScreenshots(); // Clear old screenshots
+            Console.WriteLine($"Screenshots will be saved to: {screenshotPath}\n");
+        }
+
+        // Configure input simulator to use mouse click at a fixed position
         gameLoop.InputSimulator.UseMouseClick = true;
+        gameLoop.InputSimulator.SetClickPositionFromRegion(region.X, region.Y, region.Width, region.Height);
 
         // Apply configuration to components
         ApplyConfigToAnalyzer(gameLoop.Analyzer);

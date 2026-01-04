@@ -12,6 +12,7 @@ public class MainForm : Form
     private CheckBox _dryRunCheckbox = null!;
     private CheckBox _autoStartCheckbox = null!;
     private CheckBox _verboseCheckbox = null!;
+    private CheckBox _screenshotsCheckbox = null!;
     private ComboBox _playStyleCombo = null!;
     private NumericUpDown _fpsNumeric = null!;
 
@@ -114,9 +115,18 @@ public class MainForm : Form
             Text = "Verbose Logging (debug)",
             AutoSize = true,
             Checked = true,  // Default to verbose for debugging
-            Margin = new Padding(5, 2, 5, 5)
+            Margin = new Padding(5, 2, 5, 2)
         };
         flowPanel.Controls.Add(_verboseCheckbox);
+
+        _screenshotsCheckbox = new CheckBox
+        {
+            Text = "Capture Screenshots (500ms)",
+            AutoSize = true,
+            Checked = false,
+            Margin = new Padding(5, 2, 5, 5)
+        };
+        flowPanel.Controls.Add(_screenshotsCheckbox);
 
         // Play Style
         var stylePanel = new FlowLayoutPanel { FlowDirection = FlowDirection.LeftToRight, AutoSize = true, Margin = new Padding(5, 2, 5, 5) };
@@ -292,6 +302,9 @@ public class MainForm : Form
 
         if (_verboseCheckbox.Checked)
             args += " --verbose";
+
+        if (_screenshotsCheckbox.Checked)
+            args += " --screenshots";
 
         if (_playStyleCombo.SelectedItem?.ToString() != "Balanced")
             args += $" --play-style {_playStyleCombo.SelectedItem}";

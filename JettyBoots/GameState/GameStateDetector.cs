@@ -192,38 +192,41 @@ public class GameStateDetector
 
     private bool IsLikelyGameOver(Mat frame, ImageStats stats)
     {
-        // Game over screens often have:
-        // - Dark overlay (lower mean brightness)
-        // - Text/UI elements (moderate edge density)
-        // - Less color variance (often grayed out)
+        // For Jetty Boots (space game), the background is ALWAYS dark
+        // We cannot use darkness to detect game over state
+        // Instead, we look for the YELLOW "GAME OVER" text
 
-        // Check for dark regions in center of screen
-        int centerX = frame.Width / 4;
-        int centerY = frame.Height / 4;
-        int roiWidth = frame.Width / 2;
-        int roiHeight = frame.Height / 2;
-
-        using var centerRoi = new Mat(frame, new Rect(centerX, centerY, roiWidth, roiHeight));
-        using var grayRoi = new Mat();
-        Cv2.CvtColor(centerRoi, grayRoi, ColorConversionCodes.BGR2GRAY);
-        Cv2.MeanStdDev(grayRoi, out var centerMean, out _);
-
-        // Dark center with some UI elements suggests game over
-        if (centerMean.Val0 < 80 && stats.EdgeDensity > 0.02 && stats.EdgeDensity < 0.15)
+        if (_gameOverTemplate != null && !_gameOverTemplate.Empty())
         {
-            return true;
+            return MatchTemplate(frame, _gameOverTemplate);
         }
 
-        // Check for dominant dark colors (overlay)
-        using var hsv = new Mat();
-        Cv2.CvtColor(frame, hsv, ColorConversionCodes.BGR2HSV);
-        using var darkMask = new Mat();
-        Cv2.InRange(hsv, _gameOverColorLower, _gameOverColorUpper, darkMask);
-
-        double darkRatio = Cv2.CountNonZero(darkMask) / (double)(darkMask.Width * darkMask.Height);
-        if (darkRatio > _colorMatchThreshold)
+        // Detect yellow text (GAME OVER screen has yellow text)
+        // Yellow in HSV: Hue ~20-40, high saturation, high value
+        try
         {
-            return true;
+            using var hsv = new Mat();
+            Cv2.CvtColor(frame, hsv, ColorConversionCodes.BGR2HSV);
+
+            // Yellow color range for "GAME OVER" text
+            using var yellowMask = new Mat();
+            Cv2.InRange(hsv, new Scalar(15, 100, 150), new Scalar(45, 255, 255), yellowMask);
+
+            // Count yellow pixels
+            int yellowPixels = Cv2.CountNonZero(yellowMask);
+            double yellowRatio = (double)yellowPixels / (frame.Width * frame.Height);
+
+            // If significant yellow text is present (more than 2% of screen), likely game over
+            // Increased threshold to avoid false positives from score display or other yellow elements
+            // The GAME OVER text takes up a decent portion of the screen when shown
+            if (yellowRatio > 0.02)
+            {
+                return true;
+            }
+        }
+        catch
+        {
+            // Ignore errors in detection
         }
 
         return false;
@@ -231,20 +234,17 @@ public class GameStateDetector
 
     private bool IsLikelyMenu(Mat frame, ImageStats stats)
     {
-        // Menu screens often have:
-        // - Centered content
-        // - Static elements (low motion between frames)
-        // - Specific UI patterns
+        // For Jetty Boots, we only detect menu if we have a template
+        // The game background is dark space, so we can't use simple heuristics
+        // like edge density or brightness - they'd give false positives
 
-        // For now, use simple heuristics
-        // This would be improved with actual game analysis
-
-        // Very high or very low edge density might indicate menu
-        if (stats.EdgeDensity < 0.01)
+        if (_menuTemplate != null && !_menuTemplate.Empty())
         {
-            return true; // Very static/simple screen
+            return MatchTemplate(frame, _menuTemplate);
         }
 
+        // Without a template, assume we're playing (not menu)
+        // This prevents false positives from the dark space background
         return false;
     }
 

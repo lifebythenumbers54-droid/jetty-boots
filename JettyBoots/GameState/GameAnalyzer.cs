@@ -12,6 +12,7 @@ public class GameAnalyzer : IDisposable
     private readonly PlayerDetector _playerDetector;
     private readonly ObstacleDetector _obstacleDetector;
     private readonly GameStateDetector _gameStateDetector;
+    private readonly PlayAreaDetector _playAreaDetector;
     private readonly Stopwatch _stopwatch = new();
 
     private bool _disposed;
@@ -21,6 +22,7 @@ public class GameAnalyzer : IDisposable
         _playerDetector = new PlayerDetector();
         _obstacleDetector = new ObstacleDetector();
         _gameStateDetector = new GameStateDetector();
+        _playAreaDetector = new PlayAreaDetector();
     }
 
     /// <summary>
@@ -37,6 +39,33 @@ public class GameAnalyzer : IDisposable
     /// Gets the game state detector for configuration.
     /// </summary>
     public GameStateDetector GameStateDetector => _gameStateDetector;
+
+    /// <summary>
+    /// Gets the play area detector for configuration.
+    /// </summary>
+    public PlayAreaDetector PlayAreaDetector => _playAreaDetector;
+
+    /// <summary>
+    /// Detects and configures play area boundaries from a frame.
+    /// Call this once at startup with a game frame.
+    /// </summary>
+    /// <param name="frame">A frame from the game (ideally during gameplay)</param>
+    /// <returns>True if boundaries were successfully detected</returns>
+    public bool DetectAndConfigurePlayArea(Mat frame)
+    {
+        if (_playAreaDetector.DetectPlayArea(frame))
+        {
+            // Configure PlayerDetector with detected bounds
+            _playerDetector.SetPlayAreaBounds(_playAreaDetector.Bounds);
+            return true;
+        }
+        return false;
+    }
+
+    /// <summary>
+    /// Gets the detected play area boundaries.
+    /// </summary>
+    public PlayAreaBounds PlayAreaBounds => _playAreaDetector.Bounds;
 
     /// <summary>
     /// Analyzes a single frame and returns all detection results.

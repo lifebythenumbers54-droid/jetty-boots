@@ -34,6 +34,13 @@ public class GameLoop : IDisposable
     private bool _showDebugWindow = true;
     private bool _verboseLogging = false;
 
+    // Screenshot capture for debugging
+    private bool _captureScreenshots = false;
+    private string _screenshotFolder = "Screenshots";
+    private int _screenshotIntervalMs = 250;
+    private DateTime _lastScreenshotTime = DateTime.MinValue;
+    private int _screenshotCount = 0;
+
     // Events
     public event Action<LoopStatus>? OnStatusUpdate;
     public event Action<string>? OnLog;
@@ -45,6 +52,33 @@ public class GameLoop : IDisposable
     {
         get => _verboseLogging;
         set => _verboseLogging = value;
+    }
+
+    /// <summary>
+    /// Gets or sets whether to capture screenshots for debugging player detection.
+    /// </summary>
+    public bool CaptureScreenshots
+    {
+        get => _captureScreenshots;
+        set => _captureScreenshots = value;
+    }
+
+    /// <summary>
+    /// Gets or sets the folder where screenshots are saved.
+    /// </summary>
+    public string ScreenshotFolder
+    {
+        get => _screenshotFolder;
+        set => _screenshotFolder = value;
+    }
+
+    /// <summary>
+    /// Gets or sets the interval between screenshots in milliseconds.
+    /// </summary>
+    public int ScreenshotIntervalMs
+    {
+        get => _screenshotIntervalMs;
+        set => _screenshotIntervalMs = Math.Max(100, value);
     }
 
     public GameLoop(IScreenCapture capture)
@@ -128,6 +162,46 @@ public class GameLoop : IDisposable
         {
             Cv2.NamedWindow(windowName, WindowFlags.Normal);
             Cv2.ResizeWindow(windowName, 800, 600);
+
+            // Warm-up: capture and display a few frames before starting the game loop
+            // This ensures the detection window is visible and stable
+            Log("Warming up detection window...");
+            bool playAreaDetected = false;
+            for (int i = 0; i < 30; i++) // ~1 second of warm-up at 30fps
+            {
+                using var warmupFrame = _capture.CaptureFrame();
+                if (warmupFrame != null)
+                {
+                    // Try to detect play area boundaries on first few frames
+                    if (!playAreaDetected && i >= 5)
+                    {
+                        playAreaDetected = _analyzer.DetectAndConfigurePlayArea(warmupFrame);
+                        if (playAreaDetected)
+                        {
+                            // Also configure the JumpDecider with detected boundaries
+                            _decisionEngine.JumpDecider.SetBoundaries(_analyzer.PlayAreaBounds);
+                            Log($"Play area detected: X=[{_analyzer.PlayAreaBounds.MinX}-{_analyzer.PlayAreaBounds.MaxX}], Y=[{_analyzer.PlayAreaBounds.MinY}-{_analyzer.PlayAreaBounds.MaxY}]");
+                        }
+                    }
+
+                    var warmupAnalysis = _analyzer.Analyze(warmupFrame);
+                    using var warmupOverlay = _analyzer.DrawOverlay(warmupFrame, warmupAnalysis);
+
+                    string statusText = playAreaDetected
+                        ? $"Warming up... {30 - i} (Play area detected)"
+                        : $"Warming up... {30 - i} (Detecting play area...)";
+                    Cv2.PutText(warmupOverlay, statusText, new OpenCvSharp.Point(10, 30),
+                        HersheyFonts.HersheySimplex, 0.8, new Scalar(0, 255, 255), 2);
+                    Cv2.ImShow(windowName, warmupOverlay);
+                    Cv2.WaitKey(33); // ~30fps
+                }
+            }
+
+            if (!playAreaDetected)
+            {
+                Log("WARNING: Play area not detected, using default boundaries");
+            }
+            Log("Warm-up complete. Starting game loop...");
         }
 
         Log($"Game loop started (Target FPS: {_targetFps}, Dry Run: {_dryRun}, Verbose: {_verboseLogging})");
@@ -158,8 +232,30 @@ public class GameLoop : IDisposable
                     continue;
                 }
 
+                // Re-detect play area if needed (e.g., after game restart)
+                if (_needsPlayAreaRedetection)
+                {
+                    if (_analyzer.DetectAndConfigurePlayArea(frame))
+                    {
+                        _decisionEngine.JumpDecider.SetBoundaries(_analyzer.PlayAreaBounds);
+                        Log($"Play area re-detected: X=[{_analyzer.PlayAreaBounds.MinX}-{_analyzer.PlayAreaBounds.MaxX}], Y=[{_analyzer.PlayAreaBounds.MinY}-{_analyzer.PlayAreaBounds.MaxY}]");
+                    }
+                    _needsPlayAreaRedetection = false;
+                }
+
                 // Analyze frame
                 var analysis = _analyzer.Analyze(frame);
+
+                // Capture screenshots for debugging at specified interval
+                if (_captureScreenshots)
+                {
+                    var now = DateTime.Now;
+                    if ((now - _lastScreenshotTime).TotalMilliseconds >= _screenshotIntervalMs)
+                    {
+                        _lastScreenshotTime = now;
+                        SaveDebugScreenshot(frame, analysis);
+                    }
+                }
 
                 // Verbose logging every 30 frames (1 second at 30fps)
                 verboseLogCounter++;
@@ -251,6 +347,9 @@ public class GameLoop : IDisposable
         }
     }
 
+    // Flag to trigger play area re-detection on next frame
+    private bool _needsPlayAreaRedetection = false;
+
     private void HandleGameStateChange(GameState.GameState oldState, GameState.GameState newState)
     {
         Log($"Game state changed: {oldState} -> {newState}");
@@ -263,7 +362,8 @@ public class GameLoop : IDisposable
         else if (newState == GameState.GameState.Playing && oldState != GameState.GameState.Playing)
         {
             _decisionEngine.Reset();
-            Log("New game started");
+            _needsPlayAreaRedetection = true; // Re-detect boundaries when new game starts
+            Log("New game started - will re-detect play area");
         }
     }
 
@@ -322,7 +422,92 @@ public class GameLoop : IDisposable
 
     private Mat DrawDebugOverlay(Mat frame, FrameAnalysis analysis, ActionDecision decision)
     {
-        var overlay = _analyzer.DrawOverlay(frame, analysis);
+        var overlay = frame.Clone();
+
+        // Get play area boundaries
+        var bounds = _analyzer.PlayAreaBounds;
+        int minX = bounds.MinX;
+        int maxX = bounds.MaxX;
+        int ceilingY = bounds.MinY;
+        int floorY = bounds.MaxY;
+        int playAreaHeight = floorY - ceilingY;
+        int dangerZone = ceilingY + (int)(playAreaHeight * 0.70);
+        int cautionZone = ceilingY + (int)(playAreaHeight * 0.55);
+        int centerY = (floorY + ceilingY) / 2;
+
+        // Draw playable zone rectangle (blue)
+        Cv2.Rectangle(overlay, new OpenCvSharp.Rect(minX, ceilingY, maxX - minX, floorY - ceilingY),
+            new Scalar(255, 100, 0), 2);
+
+        // Draw danger zone (red fill, semi-transparent effect via lines)
+        for (int y = dangerZone; y < floorY; y += 3)
+        {
+            Cv2.Line(overlay, new OpenCvSharp.Point(minX, y), new OpenCvSharp.Point(maxX, y), new Scalar(0, 0, 200), 1);
+        }
+        Cv2.Line(overlay, new OpenCvSharp.Point(minX, dangerZone), new OpenCvSharp.Point(maxX, dangerZone),
+            new Scalar(0, 0, 255), 2);
+
+        // Draw caution zone line (orange)
+        Cv2.Line(overlay, new OpenCvSharp.Point(minX, cautionZone), new OpenCvSharp.Point(maxX, cautionZone),
+            new Scalar(0, 165, 255), 2);
+
+        // Draw center line (green dashed effect)
+        for (int x = minX; x < maxX; x += 10)
+        {
+            Cv2.Line(overlay, new OpenCvSharp.Point(x, centerY), new OpenCvSharp.Point(Math.Min(x + 5, maxX), centerY),
+                new Scalar(0, 255, 0), 2);
+        }
+
+        // Draw ceiling line (cyan)
+        Cv2.Line(overlay, new OpenCvSharp.Point(minX, ceilingY), new OpenCvSharp.Point(maxX, ceilingY),
+            new Scalar(255, 255, 0), 2);
+
+        // Draw floor line (magenta)
+        Cv2.Line(overlay, new OpenCvSharp.Point(minX, floorY), new OpenCvSharp.Point(maxX, floorY),
+            new Scalar(255, 0, 255), 2);
+
+        // Add zone labels on right side
+        Cv2.PutText(overlay, $"CEILING ({ceilingY})", new OpenCvSharp.Point(maxX + 5, ceilingY + 5),
+            HersheyFonts.HersheySimplex, 0.4, new Scalar(255, 255, 0), 1);
+        Cv2.PutText(overlay, $"CENTER ({centerY})", new OpenCvSharp.Point(maxX + 5, centerY + 5),
+            HersheyFonts.HersheySimplex, 0.4, new Scalar(0, 255, 0), 1);
+        Cv2.PutText(overlay, $"CAUTION ({cautionZone})", new OpenCvSharp.Point(maxX + 5, cautionZone + 5),
+            HersheyFonts.HersheySimplex, 0.4, new Scalar(0, 165, 255), 1);
+        Cv2.PutText(overlay, $"DANGER ({dangerZone})", new OpenCvSharp.Point(maxX + 5, dangerZone + 5),
+            HersheyFonts.HersheySimplex, 0.4, new Scalar(0, 0, 255), 1);
+        Cv2.PutText(overlay, $"FLOOR ({floorY})", new OpenCvSharp.Point(maxX + 5, floorY + 5),
+            HersheyFonts.HersheySimplex, 0.4, new Scalar(255, 0, 255), 1);
+
+        // Draw player detection
+        if (analysis.Player.Detected)
+        {
+            // Player bounding box (bright green)
+            Cv2.Rectangle(overlay,
+                new OpenCvSharp.Rect(analysis.Player.X, analysis.Player.Y, analysis.Player.Width, analysis.Player.Height),
+                new Scalar(0, 255, 0), 2);
+
+            // Player center point (yellow filled circle)
+            Cv2.Circle(overlay, new OpenCvSharp.Point(analysis.Player.CenterX, analysis.Player.CenterY), 8, new Scalar(0, 255, 255), -1);
+            Cv2.Circle(overlay, new OpenCvSharp.Point(analysis.Player.CenterX, analysis.Player.CenterY), 8, new Scalar(0, 0, 0), 2);
+
+            // Determine zone and add label
+            string zone = analysis.Player.CenterY >= dangerZone ? "JUMP NOW!" :
+                          analysis.Player.CenterY >= cautionZone ? "Caution" :
+                          analysis.Player.CenterY <= ceilingY + 30 ? "Near ceiling" : "Safe";
+            var zoneColor = analysis.Player.CenterY >= dangerZone ? new Scalar(0, 0, 255) :
+                            analysis.Player.CenterY >= cautionZone ? new Scalar(0, 165, 255) :
+                            new Scalar(0, 255, 0);
+            Cv2.PutText(overlay, $"PLAYER: ({analysis.Player.CenterX}, {analysis.Player.CenterY}) - {zone}",
+                new OpenCvSharp.Point(10, 25), HersheyFonts.HersheySimplex, 0.6, zoneColor, 2);
+
+            // Draw trajectory prediction
+            DrawTrajectory(overlay, analysis.Player.CenterX, analysis.Player.CenterY);
+        }
+        else
+        {
+            Cv2.PutText(overlay, "PLAYER: NOT DETECTED", new OpenCvSharp.Point(10, 25),
+                HersheyFonts.HersheySimplex, 0.6, new Scalar(0, 0, 255), 2);
+        }
 
         // Add action indicator
         var actionColor = decision.Action switch
@@ -333,10 +518,17 @@ public class GameLoop : IDisposable
         };
 
         string actionText = _dryRun ? $"[DRY RUN] {decision.Action}" : decision.Action.ToString();
-        Cv2.PutText(overlay, actionText, new OpenCvSharp.Point(10, 90),
+        Cv2.PutText(overlay, actionText, new OpenCvSharp.Point(10, 50),
             HersheyFonts.HersheySimplex, 0.6, actionColor, 2);
 
-        // Add statistics
+        // Show decision reason
+        if (!string.IsNullOrEmpty(decision.Reason))
+        {
+            Cv2.PutText(overlay, $"Reason: {decision.Reason}", new OpenCvSharp.Point(10, 75),
+                HersheyFonts.HersheySimplex, 0.5, new Scalar(200, 200, 200), 1);
+        }
+
+        // Add statistics in top-right corner
         var stats = Statistics;
         Cv2.PutText(overlay, $"Jumps: {stats.JumpsSent}", new OpenCvSharp.Point(overlay.Width - 120, 30),
             HersheyFonts.HersheySimplex, 0.5, new Scalar(255, 255, 255), 1);
@@ -349,11 +541,9 @@ public class GameLoop : IDisposable
         Cv2.PutText(overlay, "Q=Quit P=Pause R=Reset", new OpenCvSharp.Point(10, overlay.Height - 45),
             HersheyFonts.HersheySimplex, 0.4, new Scalar(180, 180, 180), 1);
 
-        // Draw trajectory prediction
-        if (analysis.Player.Detected)
-        {
-            DrawTrajectory(overlay, analysis.Player.CenterX, analysis.Player.CenterY);
-        }
+        // Show game state
+        Cv2.PutText(overlay, $"State: {analysis.GameState.State}", new OpenCvSharp.Point(overlay.Width - 150, 70),
+            HersheyFonts.HersheySimplex, 0.5, new Scalar(255, 255, 255), 1);
 
         return overlay;
     }
@@ -408,6 +598,81 @@ public class GameLoop : IDisposable
     {
         OnLog?.Invoke($"[{DateTime.Now:HH:mm:ss}] {message}");
         Console.WriteLine($"[GameLoop] {message}");
+    }
+
+    private void SaveDebugScreenshot(Mat frame, FrameAnalysis analysis)
+    {
+        try
+        {
+            // Ensure screenshot folder exists
+            if (!Directory.Exists(_screenshotFolder))
+            {
+                Directory.CreateDirectory(_screenshotFolder);
+            }
+
+            _screenshotCount++;
+
+            // Save raw frame
+            string rawFilename = Path.Combine(_screenshotFolder, $"frame_{_screenshotCount:D4}_raw.png");
+            Cv2.ImWrite(rawFilename, frame);
+
+            // Save annotated frame with detection info
+            using var annotated = frame.Clone();
+
+            // Draw player detection info
+            string playerInfo = analysis.Player.Detected
+                ? $"PLAYER: YES at ({analysis.Player.CenterX}, {analysis.Player.CenterY}) conf={analysis.Player.Confidence:F2}"
+                : "PLAYER: NOT DETECTED";
+
+            Cv2.PutText(annotated, playerInfo, new OpenCvSharp.Point(10, 30),
+                HersheyFonts.HersheySimplex, 0.7,
+                analysis.Player.Detected ? new Scalar(0, 255, 0) : new Scalar(0, 0, 255), 2);
+
+            // Draw player bounding box if detected
+            if (analysis.Player.Detected)
+            {
+                Cv2.Rectangle(annotated,
+                    new OpenCvSharp.Rect(analysis.Player.X, analysis.Player.Y, analysis.Player.Width, analysis.Player.Height),
+                    new Scalar(0, 255, 0), 2);
+            }
+
+            // Draw frame info
+            Cv2.PutText(annotated, $"Frame: {_frameCount} | GameState: {analysis.GameState.State}",
+                new OpenCvSharp.Point(10, 60),
+                HersheyFonts.HersheySimplex, 0.6, new Scalar(255, 255, 255), 1);
+
+            string annotatedFilename = Path.Combine(_screenshotFolder, $"frame_{_screenshotCount:D4}_annotated.png");
+            Cv2.ImWrite(annotatedFilename, annotated);
+
+            Log($"[SCREENSHOT] Saved frame {_screenshotCount}: {rawFilename}");
+        }
+        catch (Exception ex)
+        {
+            Log($"[SCREENSHOT] Error saving screenshot: {ex.Message}");
+        }
+    }
+
+    /// <summary>
+    /// Clears all screenshots from the screenshot folder.
+    /// </summary>
+    public void ClearScreenshots()
+    {
+        try
+        {
+            if (Directory.Exists(_screenshotFolder))
+            {
+                foreach (var file in Directory.GetFiles(_screenshotFolder, "frame_*.png"))
+                {
+                    File.Delete(file);
+                }
+                _screenshotCount = 0;
+                Log($"[SCREENSHOT] Cleared all screenshots from {_screenshotFolder}");
+            }
+        }
+        catch (Exception ex)
+        {
+            Log($"[SCREENSHOT] Error clearing screenshots: {ex.Message}");
+        }
     }
 
     public void Dispose()

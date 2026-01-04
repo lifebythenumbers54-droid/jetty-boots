@@ -16,8 +16,13 @@ public class GameInputSimulator
     // Configuration
     private VirtualKeyCode _jumpKey = VirtualKeyCode.SPACE;
     private VirtualKeyCode _interactKey = VirtualKeyCode.VK_E;
-    private bool _useMouseClick = true;  // Default to mouse click for Jetty Boots
+    private bool _useMouseClick = true;  // Use mouse click for Jetty Boots
     private int _minInputIntervalMs = 50;  // Minimum time between inputs
+
+    // Click position for mouse clicks (set from capture region)
+    private int _clickX = 0;
+    private int _clickY = 0;
+    private bool _useFixedClickPosition = false;
 
     // Windows API imports
     [DllImport("user32.dll")]
@@ -206,6 +211,28 @@ public class GameInputSimulator
     }
 
     /// <summary>
+    /// Sets a fixed click position for mouse clicks (screen coordinates).
+    /// </summary>
+    public void SetClickPosition(int x, int y)
+    {
+        _clickX = x;
+        _clickY = y;
+        _useFixedClickPosition = true;
+    }
+
+    /// <summary>
+    /// Sets the click position based on a capture region (clicks in center-left area).
+    /// </summary>
+    public void SetClickPositionFromRegion(int regionX, int regionY, int regionWidth, int regionHeight)
+    {
+        // Click in the left-center area of the game (where player typically is)
+        _clickX = regionX + (regionWidth / 4);  // 25% from left
+        _clickY = regionY + (regionHeight / 2); // Center vertically
+        _useFixedClickPosition = true;
+        Console.WriteLine($"Set click position to ({_clickX}, {_clickY})");
+    }
+
+    /// <summary>
     /// Sends a jump input (key press or mouse click).
     /// </summary>
     public bool SendJump()
@@ -221,7 +248,21 @@ public class GameInputSimulator
         {
             if (_useMouseClick)
             {
-                _simulator.Mouse.LeftButtonClick();
+                if (_useFixedClickPosition)
+                {
+                    // Use Windows API to click at absolute position
+                    SetCursorPos(_clickX, _clickY);
+                    Thread.Sleep(10); // Small delay to ensure cursor has moved
+
+                    // Send mouse down/up events
+                    mouse_event(MOUSEEVENTF_LEFTDOWN, 0, 0, 0, 0);
+                    Thread.Sleep(5);
+                    mouse_event(MOUSEEVENTF_LEFTUP, 0, 0, 0, 0);
+                }
+                else
+                {
+                    _simulator.Mouse.LeftButtonClick();
+                }
             }
             else
             {
@@ -238,6 +279,16 @@ public class GameInputSimulator
             return false;
         }
     }
+
+    // Windows API for mouse input
+    [DllImport("user32.dll")]
+    private static extern bool SetCursorPos(int X, int Y);
+
+    [DllImport("user32.dll")]
+    private static extern void mouse_event(uint dwFlags, int dx, int dy, uint dwData, int dwExtraInfo);
+
+    private const uint MOUSEEVENTF_LEFTDOWN = 0x0002;
+    private const uint MOUSEEVENTF_LEFTUP = 0x0004;
 
     /// <summary>
     /// Sends a key press to start/restart the game.

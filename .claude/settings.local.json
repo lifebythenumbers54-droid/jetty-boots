@@ -45,7 +45,8 @@
       "Bash(dotnet add package:*)",
       "Bash(gh repo:*)",
       "Bash(git stash:*)",
-      "Bash(del \"C:\\ClaudeCode\\Projects\\FlappyBird\\JettyBootsGUI\\Form1.cs\" \"C:\\ClaudeCode\\Projects\\FlappyBird\\JettyBootsGUI\\Form1.Designer.cs\")"
+      "Bash(del \"C:\\ClaudeCode\\Projects\\FlappyBird\\JettyBootsGUI\\Form1.cs\" \"C:\\ClaudeCode\\Projects\\FlappyBird\\JettyBootsGUI\\Form1.Designer.cs\")",
+      "Bash(dotnet:*)"
     ]
   },
   "model": "opus"
